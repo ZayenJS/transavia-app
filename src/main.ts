@@ -12,7 +12,7 @@ class AppDate extends Date {
   };
 }
 
-const requiredArgs = ['origin', 'destination', 'start'];
+const requiredArgs = ['origin', 'destination', 'start', 'mail'];
 const program = new Command();
 
 const formatDate = (time: string) =>
@@ -31,39 +31,54 @@ program
   .option('-d, --destination <destination>', 'Destination airport code')
   .option('-s, --start <start>', 'Start date')
   .option('-p, --price <price>', 'Maximum price')
+  .option('-m, --mail <mail>', 'Email address to send results to')
   .option('-a, --adults [adults]', 'Number of adults')
   .option('-c, --children [children]', 'Number of children')
+  .option('-r, --hour-range [hourRange]', 'Hour range')
   .action(main);
 
 program.parse(process.argv);
 
 interface FlightArguments {
-  origin: string;
-  destination: string;
-  start: string;
-  price?: number;
-  adults?: number;
-  children?: number;
+  readonly origin: string;
+  readonly destination: string;
+  readonly start: string;
+  readonly mail: string;
+
+  readonly price?: number;
+  readonly adults?: number;
+  readonly children?: number;
+  readonly hourRange?: string;
 }
 
 async function main(args: FlightArguments) {
-  const { origin, destination, start, adults, children, price } = args;
-
-  if (!origin || !destination || !start) {
-    program.help();
-    console.error(`Missing required arguments. Required arguments are: ${requiredArgs.join(', ')}`);
+  if (!process.env.TRANSAVIA_API_KEY) {
+    console.error('Missing Transavia API key');
     process.exit(1);
   }
 
+  const { origin, destination, start, adults, children, price, mail, hourRange } = args;
+
+  for (const arg of requiredArgs) {
+    if (!(arg in args)) {
+      console.error(`Missing required argument: ${arg}`);
+      program.help();
+      process.exit(1);
+    }
+  }
+
   const API_URL = 'https://api.transavia.com/v1/flightoffers/';
+  const _adults = adults ?? 2;
+  const _children = children ?? 0;
 
   const params = {
     origin,
     destination,
     originDepartureDate: start,
     directFlight: true,
-    adults: adults ?? 2,
-    children: children ?? 0,
+    adults: _adults,
+    children: _children,
+    hourRange: hourRange ?? '0-24',
   };
 
   const formattedStart = start.replace(/(\d{4})(\d{2})(\d{2})/, (_match, m1, m2, m3) => {
@@ -87,13 +102,13 @@ async function main(args: FlightArguments) {
                 <strong>Date de départ:</strong> ${formatDate(formattedStart)}
               </li>
               <li>
-                <strong>Nombre d'adultes:</strong> ${adults}
+                <strong>Nombre d'adultes:</strong> ${_adults}
               </li>
               <li>
-                <strong>Nombre d'enfants:</strong> ${children ?? 0}
+                <strong>Nombre d'enfants:</strong> ${_children}
               </li>
               <li>
-                <strong>Prix maximum:</strong> ${price}
+                <strong>Prix maximum:</strong> ${price ?? 'Aucun'}
               </li>
             </ul>
             <table>
@@ -112,6 +127,10 @@ async function main(args: FlightArguments) {
               `;
 
   let hasResults = false;
+
+  const hourRangeStart = hourRange?.split('-')[0] ?? 0;
+  const hourRangeEnd = hourRange?.split('-')[1] ?? 24;
+  const maxPrice = price ?? 1_000;
 
   for (let i = 0; i < 15; i++) {
     const date = new AppDate(formattedStart).addDays(i);
@@ -145,8 +164,6 @@ async function main(args: FlightArguments) {
         const currency = flight.pricingInfoSum.currencyCode;
         const link = flight.deeplink.href.replace(/nl-NL/g, 'fr-FR');
 
-        const maxPrice = price ?? 1_000;
-
         if (priceOnePassenger < maxPrice) {
           const hour = +Intl.DateTimeFormat('fr-FR', { hour: 'numeric' })
             .format(new Date(departureTime))
@@ -154,7 +171,7 @@ async function main(args: FlightArguments) {
             .replace(/^0/, '')
             .trim();
 
-          if (hour < 11 || hour > 14) {
+          if (hour < hourRangeStart || hour > hourRangeEnd) {
             continue;
           }
 
@@ -184,9 +201,7 @@ async function main(args: FlightArguments) {
           </table>
           `;
 
-  const mailer = new Mailer('David Nogueira <noreply@david-nogueira.dev>', [
-    'dngjosejoao@gmail.com',
-  ]);
+  const mailer = new Mailer('David Nogueira <noreply@david-nogueira.dev>', [mail]);
 
   if (hasResults) {
     mailer.sendMail('Nouvelle offre de vol', mailText, mailHTML);
